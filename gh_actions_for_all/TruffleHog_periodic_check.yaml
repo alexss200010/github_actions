@@ -1,0 +1,52 @@
+name: TruffleHog periodic check
+on:
+  schedule:
+    - cron: '0 1 * * *'
+jobs:
+  get_checkrepolist:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.value }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Get list of repositories pushed 1 day ago
+        id: matrix
+        run: |
+          YESTERDAY=$(date --date '1 day ago' "+%Y-%m-%d")
+          LIST=$(gh repo list ${{ env.GH_ORG }} -L 100 --json name,pushedAt | jq --arg yesterday $YESTERDAY '.[] | select(.pushedAt >= $yesterday)' | jq .name -c | grep -v -f .ignore | jq -s)
+          echo "::set-output name=value::$(echo $LIST)"
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+          GH_ORG: "XXXX"
+  check_trufflehog:
+    needs: get_checkrepolist
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        value: ${{ fromJson(needs.get_checkrepolist.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v2
+      - name: TruffleHog Install 
+        run: |
+          mv files/trufflehog /usr/local/bin
+          trufflehog --version
+      - name: Exec TruffleHog
+        run: |
+          trufflehog git https://${{ env.GH_USER }}:${{ env.GH_TOKEN }}@github.com/${{ env.GH_ORG }}/${{ matrix.value }} --only-verified --fail
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+          GH_USER: "XXXX"
+          GH_ORG: "XXXX"
+      - name: Create Issue
+        if: failure()
+        uses: imjohnbo/issue-bot@ebb016264b7ca514eea6315872b0d768868fd8c1
+        with:
+          title: "[TruffleHog] ${{ matrix.value }} is Failure"
+          labels: "trufflehog"
+          body: |
+            [${{ matrix.value }}](https://github.com/${{ env.GH_ORG }}/${{ matrix.value }}) is Failure.
+            See [the action log](https://github.com/${{ env.GH_ORG }}/${{ matrix.value }}/actions/runs/${{ github.run_id }}) for more details.
+            Assign a team administrator for the repository to be the resolver of this issue.
+        env:
+          GH_ORG: "XXXX"
